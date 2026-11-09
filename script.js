@@ -120,3 +120,135 @@
   wake.addEventListener('input', render);
   render();
 })();
+
+/* TRANSIÇÕES v2 · Sereno Clínica do Sono · do escuro para a luz, sem pressa
+   Entradas de textos, imagens e cartões + traço de passagem entre seções, com assinatura própria do nicho.
+   Só roda com JS e sem prefers-reduced-motion; o conteúdo nunca fica escondido sem JS. */
+(() => {
+  const C = {"step": 0.16, "settle": 3.4, "imgFilter": "brightness(.12) saturate(.2)", "divider": "<svg viewBox=\"0 0 1200 28\"><path class=\"ln\" pathLength=\"1\" style=\"--ld:0.00s\" d=\"M600 20 H0\"/><path class=\"ln\" pathLength=\"1\" style=\"--ld:0.00s\" d=\"M600 20 H1200\"/><circle class=\"dot\" cx=\"330\" cy=\"4\" r=\"2.2\" style=\"--ld:1.0s\"/><circle class=\"dot\" cx=\"760\" cy=\"2\" r=\"1.6\" style=\"--ld:1.3s\"/><circle class=\"dot\" cx=\"980\" cy=\"7\" r=\"2\" style=\"--ld:1.6s\"/><circle class=\"dot\" cx=\"150\" cy=\"9\" r=\"1.4\" style=\"--ld:1.8s\"/></svg>", "words": false, wordDelay: (i) => i * .08, cardDelay: (n) => Math.min(n, 5) * .18};
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches || !('IntersectionObserver' in window)) return;
+  const html = document.documentElement;
+  html.classList.add('fx');
+  const mob = matchMedia('(max-width: 760px)').matches;
+  const SKIP = '.hero, body > header, nav, footer, .nav, .wa, .whats, .wpp, [class*="whatsapp"], canvas, video, iframe, [data-nofx], [class*="marquee"], [class*="ticker"], [aria-hidden="true"]' + (C.skip ? ', ' + C.skip : '');
+  const pinned = el => { for (let p = el; p && p !== document.body; p = p.parentElement) { const s = getComputedStyle(p).position; if (s === 'sticky' || s === 'fixed') return true; } return false; };
+  const F0 = new Map();
+  if (C.imgFilter) document.querySelectorAll('section img').forEach(i => F0.set(i, getComputedStyle(i).filter));
+  const sections = [...document.querySelectorAll('section')].filter(s => !s.parentElement.closest('section') && !s.matches(SKIP) && !s.closest(SKIP));
+
+  // o sistema antigo de revelação (fade genérico) sai de cena fora da hero
+  sections.forEach(s => s.querySelectorAll('.rv, .reveal').forEach(el => { el.classList.remove('rv', 'reveal'); el.style.transitionDelay = ''; }));
+  sections.forEach(s => s.classList.remove('rv', 'reveal'));
+
+  const items = []; // {el, kind}
+  const taken = new Set();
+  const isTaken = el => { for (const t of taken) if (t !== el && t.contains(el)) return true; return false; };
+
+  sections.forEach(sec => {
+    // 1. cartões: grupos de 3+ irmãos parecidos com imagem ou título
+    const groups = [];
+    sec.querySelectorAll('*').forEach(p => {
+      const ch = [...p.children].filter(c => !['SCRIPT', 'TEMPLATE', 'BR'].includes(c.tagName));
+      if (ch.length < 3 || p.closest(SKIP)) return;
+      const sig = c => c.tagName + '.' + (c.classList[0] || '');
+      const cnt = {}; ch.forEach(c => cnt[sig(c)] = (cnt[sig(c)] || 0) + 1);
+      const best = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0];
+      if (best[1] < 3 || best[1] < ch.length * .7) return;
+      const cards = ch.filter(c => sig(c) === best[0]);
+      if (!cards.every(c => c.querySelector('img, h3, h4, strong, summary, dt') && c.getBoundingClientRect().height > 50)) return;
+      if (cards.some(c => pinned(c))) return;
+      if (groups.some(g => g.some(c => c.contains(p)))) return;
+      groups.push(cards);
+    });
+    groups.forEach(g => g.forEach((c, i) => { if (!isTaken(c)) { c.classList.add('fx-c'); c.style.setProperty('--n', i); taken.add(c); items.push({ el: c, kind: 'c', i }); } }));
+
+    // 2. imagens soltas (fora de cartões, fundos fixos e áreas presas)
+    sec.querySelectorAll('img').forEach(img => {
+      if (img.closest(SKIP) || isTaken(img) || pinned(img)) return;
+      let w = img.parentElement; if (w.tagName === 'PICTURE') w = w.parentElement;
+      const ws = getComputedStyle(img);
+      if (ws.position === 'absolute' && w === sec) return;
+      const r = w.getBoundingClientRect(), rs = sec.getBoundingClientRect();
+      if (r.width * r.height > rs.width * rs.height * .85) return; // foto de fundo da seção
+      let target = w;
+      if (w === sec || w.querySelector('h1, h2, h3, p, a, button') ) target = img;
+      if (isTaken(target) || taken.has(target)) return;
+      target.classList.add('fx-i'); if (target === img) target.classList.add('fx-self');
+      if (getComputedStyle(target).clipPath !== 'none') target.classList.add('fx-noclip');
+      taken.add(target); items.push({ el: target, kind: 'i' });
+    });
+
+    // 3. textos: títulos, parágrafos, listas de dados, botões e formulários, em cascata
+    sec.querySelectorAll('h2, h3, h4, p, li, blockquote, dl, form, ' + (C.extraText || '.eyebrow') + ', a[class*="btn"], a[class*="cta"], button[class*="btn"]').forEach(el => {
+      if (el.closest(SKIP) || isTaken(el) || taken.has(el) || pinned(el)) return;
+      if (el.closest('form') && el.tagName !== 'FORM') return;
+      if (!el.textContent.trim() && el.tagName !== 'FORM') return;
+      if (el.tagName === 'H2' && C.words) splitWords(el);
+      else el.classList.add('fx-t');
+      taken.add(el); items.push({ el, kind: el.classList.contains('fx-ws') ? 'w' : 't' });
+    });
+  });
+
+  function splitWords(h) {
+    h.classList.add('fx-ws');
+    const walk = node => {
+      [...node.childNodes].forEach(n => {
+        if (n.nodeType === 3) {
+          const parts = n.textContent.split(/(\s+)/);
+          const frag = document.createDocumentFragment();
+          parts.forEach(t => { if (!t) return; if (/^\s+$/.test(t)) frag.append(t); else { const s = document.createElement('span'); s.className = 'fx-w'; s.textContent = t; frag.append(s); } });
+          n.replaceWith(frag);
+        } else if (n.nodeType === 1 && !/^(BR|SVG|IMG)$/i.test(n.tagName)) {
+          const cs = getComputedStyle(n);
+          if (cs.backgroundClip === 'text' || cs.webkitBackgroundClip === 'text' || cs.display === 'block') { n.classList.add('fx-w'); return; }
+          walk(n);
+        }
+      });
+    };
+    walk(h);
+    [...h.querySelectorAll('.fx-w')].forEach((w, i, all) => w.style.setProperty('--wd', C.wordDelay(i, all.length) + 's'));
+  }
+
+  // filtro de cor de cada foto preservado: a entrada soma o efeito ao filtro original
+  if (C.imgFilter) document.querySelectorAll('.fx-i img, img.fx-i, .fx-c img').forEach(img => {
+    const f = F0.get(img); img.style.setProperty('--f0', (f && f !== 'none' ? f + ' ' : '') + C.imgFilter);
+  });
+
+  // 4. traço de passagem entre seções
+  let nDiv = 0;
+  sections.forEach((sec, k) => {
+    if (nDiv >= (C.maxDiv || 7) || k === 0 && C.skipFirstDiv) return;
+    if (sec.matches(C.noDiv || '.fixo, .window, .janela, .sky')) return;
+    if (!sec.querySelector('h2')) return;
+    if (getComputedStyle(sec).position === 'static') sec.style.position = 'relative';
+    const box = document.createElement('div');
+    box.className = 'fx-div'; box.setAttribute('aria-hidden', 'true');
+    box.innerHTML = C.divider;
+    sec.prepend(box); nDiv++;
+    items.push({ el: box, kind: 'd' });
+  });
+
+  // entrada: os elementos que chegam juntos entram em cascata, na ordem do texto
+  const step = C.step * (mob ? .7 : 1);
+  const show = (el, d) => {
+    el.style.transitionDelay = d + 's';
+    el.style.setProperty('--dl', d + 's');
+    el.classList.add('fx-on');
+    setTimeout(() => { el.classList.add('fx-done'); el.style.transitionDelay = ''; }, (d + C.settle) * 1000);
+  };
+  // elementos recortados (clip-path) são observados pelo pai, porque o recorte zera a área visível
+  const proxyOf = el => ((el.classList.contains('fx-i') && !el.classList.contains('fx-noclip')) || (C.textClip && el.classList.contains('fx-t'))) ? el.parentElement : el;
+  const watch = new Map();
+  items.forEach(({ el }) => { const p = proxyOf(el); if (!watch.has(p)) watch.set(p, []); watch.get(p).push(el); });
+  const io = new IntersectionObserver(es => {
+    const ins = es.filter(e => e.isIntersecting).flatMap(e => { io.unobserve(e.target); return watch.get(e.target) || []; })
+      .sort((a, b) => a.compareDocumentPosition(b) & 2 ? 1 : -1);
+    ins.forEach((el, i) => {
+      const n = el.classList.contains('fx-c') ? C.cardDelay(+el.style.getPropertyValue('--n') || 0) : Math.min(i, 7) * step;
+      show(el, n);
+    });
+  }, { threshold: .14, rootMargin: '0px 0px -7% 0px' });
+  watch.forEach((_, p) => io.observe(p));
+  // quem chega por âncora já encontra o que ficou acima pronto
+  requestAnimationFrame(() => watch.forEach((els, p) => { if (p.getBoundingClientRect().bottom < 0) { io.unobserve(p); els.forEach(el => show(el, 0)); } }));
+})();
